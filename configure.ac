@@ -235,8 +235,8 @@ if test "$enable_iconv" = yes ; then
 		AC_MSG_ERROR([Could not find libiconv. Please install libiconv and libiconv-devel.])
 	fi
 	if test "x$HAVE_ICONV" != "x"; then
-		AC_DEFINE(HAVE_ICONV)
-		AC_DEFINE(MBCS_CODE,[])
+		AC_DEFINE(HAVE_ICONV, [], [Description])
+		AC_DEFINE(MBCS_CODE,[], [Description])
 	fi
 fi
 
@@ -363,9 +363,6 @@ CHECK_HEADER_DEFINE(INT_MAX, [limits.h],,
 
 # Checks for typedefs
 # -------------------
-
-AC_TYPE_SIZE_T
-AC_TYPE_OFF_T
 
 AC_MSG_CHECKING(for fpos_t)
 AC_EGREP_HEADER(fpos_t, stdio.h, AC_MSG_RESULT(yes),

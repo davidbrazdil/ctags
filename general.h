@@ -37,6 +37,14 @@
 # endif
 #endif
 
+#include<sys/types.h>
+#include<sys/stat.h>
+#include<stdio.h>
+#include<dirent.h>
+#include<stdlib.h>
+#include<unistd.h>
+#include<time.h>
+#include <fnmatch.h>
 
 /*
 *   MACROS

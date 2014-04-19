@@ -32,7 +32,7 @@ CFLAGS	= @CFLAGS@
 LDFLAGS	= @LDFLAGS@
 LIBS	= @LIBS@
 EXEEXT	= @EXEEXT@
-OBJEXT	= @OBJEXT@
+OBJEXT	= o
 
 # If you cannot run the "configure" script to set the variables above, then
 # uncomment the defines below and customize them for your environment. If
