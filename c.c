@@ -48,7 +48,7 @@
 *   DATA DECLARATIONS
 */
 
-enum { NumTokens = 3 };
+enum { NumTokens = 7 };
 
 typedef enum eException {
 	ExceptionNone, ExceptionEOF, ExceptionFormattingError,
@@ -119,6 +119,8 @@ typedef enum eTokenType {
 	TOKEN_PAREN_NAME,    /* a single name in parentheses */
 	TOKEN_SEMICOLON,     /* the semicolon character */
 	TOKEN_SPEC,          /* a storage class specifier, qualifier, type, etc. */
+	TOKEN_STAR,          /* pointer * detection */
+	TOKEN_AMPERSAND,	 /* ampersand & detection */
 	TOKEN_COUNT
 } tokenType;
 
@@ -258,7 +260,9 @@ static langType Lang_csharp;
 static langType Lang_java;
 static langType Lang_vera;
 static vString *Signature;
+static vString *QuotedString = NULL;
 static boolean CollectingSignature;
+static vString *ReturnType;
 
 /* Number used to uniquely identify anonymous structs and unions. */
 static int AnonymousID = 0;
@@ -564,7 +568,6 @@ static const char *implementationString (const impType imp)
 /*
 *   Debugging functions
 */
-
 #ifdef DEBUG
 
 #define boolString(c)   ((c) ? "TRUE" : "FALSE")
@@ -573,7 +576,7 @@ static const char *tokenString (const tokenType type)
 {
 	static const char *const names [] = {
 		"none", "args", "}", "{", "colon", "comma", "double colon", "keyword",
-		"name", "package", "paren-name", "semicolon", "specifier"
+		"name", "package", "paren-name", "semicolon", "specifier", "star", "ampersand"
 	};
 	Assert (sizeof (names) / sizeof (names [0]) == TOKEN_COUNT);
 	Assert ((int) type < TOKEN_COUNT);
@@ -637,13 +640,13 @@ static void __unused__ pt (tokenInfo *const token)
 static void __unused__ ps (statementInfo *const st)
 {
 	unsigned int i;
-	printf ("scope: %s   decl: %s   gotName: %s   gotParenName: %s\n",
+	printf ("scope: %s   decl: %s   gotName: %s   gotParenName: %s isPointer: %s\n",
 		scopeString (st->scope), declString (st->declaration),
-		boolString (st->gotName), boolString (st->gotParenName));
+		boolString (st->gotName), boolString (st->gotParenName), boolString (st->isPointer));
 	printf ("haveQualifyingName: %s\n", boolString (st->haveQualifyingName));
 	printf ("access: %s   default: %s\n", accessString (st->member.access),
 		accessString (st->member.accessDefault));
-	printf ("token  : ");
+	printf ("active token  : ");
 	pt (activeToken (st));
 	for (i = 1  ;  i < (unsigned int) NumTokens  ;  ++i)
 	{
@@ -982,8 +985,15 @@ static void addOtherFields (tagEntryInfo* const tag, const tagType type,
 		case TAG_FUNCTION:
 		case TAG_METHOD:
 		case TAG_PROTOTYPE:
-			if (vStringLength (Signature) > 0)
+			if (vStringLength (Signature) > 0) 
+			{
 				tag->extensionFields.signature = vStringValue (Signature);
+			}
+
+			if (vStringLength (ReturnType) > 0) 
+			{
+				tag->extensionFields.returnType = vStringValue (ReturnType);
+			}
 		case TAG_CLASS:
 		case TAG_ENUM:
 		case TAG_ENUMERATOR:
@@ -1156,7 +1166,7 @@ static void makeTag (const tokenInfo *const token,
 
 		findScopeHierarchy (scope, st);
 		addOtherFields (&e, type, st, scope, typeRef);
-
+		
 		makeTagEntry (&e);
 		makeExtraTagEntry (type, &e, scope);
 		vStringDelete (scope);
@@ -1283,7 +1293,7 @@ static void qualifyVariableTag (const statementInfo *const st,
 			if (isLanguage (Lang_java) || isLanguage (Lang_csharp))
 				makeTag (nameToken, st,
 						(boolean) (st->member.access == ACCESS_PRIVATE), TAG_FIELD);
-			else if (st->scope == SCOPE_GLOBAL  ||  st->scope == SCOPE_STATIC)
+			else if (st->scope == SCOPE_GLOBAL  ||  st->scope == SCOPE_STATIC || st->scope == SCOPE_EXTERN)
 				makeTag (nameToken, st, TRUE, TAG_MEMBER);
 		}
 		else
@@ -1375,8 +1385,16 @@ static void skipToMatch (const char *const pair)
 
 	while (matchLevel > 0  &&  (c = skipToNonWhite ()) != EOF)
 	{
-		if (CollectingSignature)
-			vStringPut (Signature, c);
+		if (CollectingSignature){
+			if(c == STRING_SYMBOL){
+				vStringCatS(Signature, QuotedString->buffer);
+				vStringDelete(QuotedString);
+				QuotedString = NULL;
+			} else {
+				vStringPut (Signature, c);
+			}			
+		}
+
 		if (c == begin)
 		{
 			++matchLevel;
@@ -2073,7 +2091,7 @@ static void processAngleBracket (void)
 			cppUngetc (c);
 		}
 	} else {
-		cppUngetc (c);
+		cppUngetc (c);		
 	}
 }
 
@@ -2100,6 +2118,79 @@ static void parseJavaAnnotation (statementInfo *const st)
 		/* Bug #1691412: skip any annotation arguments. */
 		skipParens ();
 	}
+}
+
+static void parseReturnType (statementInfo *const st)
+{
+	int i;
+	int lower_bound;
+	tokenInfo * finding_tok;
+
+	/* FIXME TODO: if java language must be supported then impement this here
+	 * removing the current FIXME */
+	if (!isLanguage (Lang_c) && !isLanguage (Lang_cpp))
+	{		
+		return;
+	}
+	
+	vStringClear (ReturnType);	
+
+	finding_tok = prevToken (st, 1);
+	
+	if (isType (finding_tok, TOKEN_NONE))
+		return;
+	
+	finding_tok = prevToken (st, 2);
+	
+	if (finding_tok->type == TOKEN_DOUBLE_COLON)
+		lower_bound = 3;
+	else
+		lower_bound = 1;
+	
+	for (i = (unsigned int) NumTokens;  i > lower_bound;  i--)
+	{
+		tokenInfo * curr_tok;
+		curr_tok = prevToken (st, i);	
+
+		switch (curr_tok->type)
+		{
+			case TOKEN_NONE:
+				continue;
+				break;
+			
+			case TOKEN_DOUBLE_COLON:
+				/* usually C++ class scope */
+				vStringCatS (ReturnType, "::");				
+				break;
+
+			case TOKEN_STAR:
+				/* pointers */
+				vStringPut (ReturnType, '*');
+				break;
+
+			case TOKEN_AMPERSAND:
+				/* references */
+				vStringPut (ReturnType, '&');
+				break;
+
+			case TOKEN_KEYWORD:
+				vStringPut (ReturnType, ' ');				
+			default:
+				vStringCat (ReturnType, curr_tok->name);
+				break;				
+		}
+	}
+
+	vStringTerminate (ReturnType);
+
+	/*
+	printf ("~~~~~ statement ---->\n");
+	ps (st);
+	printf ("FOUND ReturnType: %s\n", vStringValue (ReturnType));	
+	printf ("<~~~~~\n");
+	*/
+	vStringTerminate (ReturnType);	
+	return;	
 }
 
 static int parseParens (statementInfo *const st, parenInfo *const info)
@@ -2304,6 +2395,7 @@ static void analyzeParens (statementInfo *const st)
 
 		initParenInfo (&info);
 		parseParens (st, &info);
+		parseReturnType (st);
 		c = skipToNonWhite ();
 		cppUngetc (c);
 		if (info.invalidContents)
@@ -2539,9 +2631,15 @@ static void nextToken (statementInfo *const st)
 		switch (c)
 		{
 			case EOF: longjmp (Exception, (int) ExceptionEOF);  break;
-			case '(': analyzeParens (st);                       break;
+			/* analyze functions and co */
+			case '(': analyzeParens (st);						break;
 			case '<': processAngleBracket ();                   break;
-			case '*': st->haveQualifyingName = FALSE;           break;
+			case '*': 
+				st->haveQualifyingName = FALSE;
+				setToken (st, TOKEN_STAR);
+				break;
+			case '&': setToken (st, TOKEN_AMPERSAND);			break;
+				
 			case ',': setToken (st, TOKEN_COMMA);               break;
 			case ':': processColon (st);                        break;
 			case ';': setToken (st, TOKEN_SEMICOLON);           break;
@@ -2657,6 +2755,7 @@ static void nest (statementInfo *const st, const unsigned int nestLevel)
 		case DECL_FUNCTION:
 		case DECL_TASK:
 			st->inFunction = TRUE;
+
 			/* fall through */
 		default:
 			if (includeTag (TAG_LOCAL, FALSE))
@@ -2768,6 +2867,7 @@ static void createTags (const unsigned int nestLevel,
 
 		nextToken (st);
 		token = activeToken (st);
+		
 		if (isType (token, TOKEN_BRACE_CLOSE))
 		{
 			if (nestLevel > 0)
@@ -2804,6 +2904,7 @@ static boolean findCTags (const unsigned int passCount)
 	Assert (passCount < 3);
 	cppInit ((boolean) (passCount > 1), isLanguage (Lang_csharp));
 	Signature = vStringNew ();
+	ReturnType = vStringNew ();
 
 	exception = (exception_t) setjmp (Exception);
 	retry = FALSE;
@@ -2820,6 +2921,7 @@ static boolean findCTags (const unsigned int passCount)
 		}
 	}
 	vStringDelete (Signature);
+	vStringDelete (ReturnType);
 	cppTerminate ();
 	return retry;
 }
